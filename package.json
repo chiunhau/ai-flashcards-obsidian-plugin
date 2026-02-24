@@ -1,6 +1,6 @@
 {
   "name": "ai-language-flashcards",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Create language flashcards from highlighted text in Obsidian using AI",
   "main": "main.js",
   "scripts": {

@@ -1,9 +1,9 @@
 {
-  "id": "ai-language-flashcards",
-  "name": "AI Language Flashcards",
-  "version": "1.0.0",
-  "minAppVersion": "0.15.0",
-  "description": "Highlight text to auto-generate language flashcard notes with AI-powered translations and examples.",
-  "author": "chiunhau",
-  "isDesktopOnly": false
+	"id": "ai-language-flashcards",
+	"name": "AI Language Flashcards",
+	"version": "1.0.1",
+	"minAppVersion": "0.15.0",
+	"description": "Highlight text to auto-generate language flashcard notes with AI-powered translations and examples.",
+	"author": "chiunhau",
+	"isDesktopOnly": false
 }
