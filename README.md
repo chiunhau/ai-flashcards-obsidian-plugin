@@ -19,7 +19,7 @@ You must obtain a free Google Gemini API key to use this plugin.
 
 ### Manual Installation (From GitHub)
 
-1. Download the latest release (`main.js`, `manifest.json`, `styles.css`) from the [Releases](https://github.com/USERNAME/obsidian-ai-language-flashcards/releases) page.
+1. Download the latest release (`main.js`, `manifest.json`, `styles.css`) from the [Releases](https://github.com/chiunhau/ai-flashcards-obsidian-plugin/releases) page.
 2. Inside your vault, go to `.obsidian/plugins/` and create a folder named `ai-language-flashcards`.
 3. Place the downloaded files inside the newly created folder.
 4. Reload Obsidian and enable the plugin in Community Plugins.
