@@ -5,13 +5,77 @@ import { z } from "zod";
 import { PluginSettings } from "../types";
 import { sanitizeFilename, ensureFolderExists } from "../utils/file";
 
+interface OutputField {
+  key: string;
+  description: string;
+}
+
+function parseOutputFields(str: string): OutputField[] {
+  return str
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const idx = line.indexOf(":");
+      if (idx === -1) return { key: line, description: "" };
+      return {
+        key: line.slice(0, idx).trim(),
+        description: line.slice(idx + 1).trim(),
+      };
+    })
+    .filter((f) => f.key.length > 0);
+}
+
+function buildSchema(fields: OutputField[]): z.ZodObject<Record<string, z.ZodType>> {
+  const shape: Record<string, z.ZodType> = {};
+  for (const f of fields) {
+    shape[f.key] = f.description ? z.string().describe(f.description) : z.string();
+  }
+  return z.object(shape);
+}
+
+function renderTemplate(template: string, data: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => data[key] ?? "");
+}
+
+function parseFrontmatterConfig(
+  config: string,
+  flashcard: Record<string, string>,
+  sourceText: string
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const line of config.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const idx = trimmed.indexOf(":");
+    if (idx === -1) continue;
+
+    const key = trimmed.slice(0, idx).trim();
+    let value = trimmed.slice(idx + 1).trim();
+
+    value = value.replace(/\{\{source_text\}\}/g, sourceText);
+    value = value.replace(/\{\{(\w+)\}\}/g, (_, field) => flashcard[field] ?? "");
+
+    if (value.startsWith("[") || value.startsWith("{")) {
+      try {
+        result[key] = JSON.parse(value);
+        continue;
+      } catch {
+        // fall through to string
+      }
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
 export async function generateFlashcard(
   app: App,
   settings: PluginSettings,
-  selectedText: string,
-  wordClassList: string[]
+  sourceText: string
 ) {
-  if (!selectedText || selectedText.trim().length === 0) {
+  if (!sourceText || sourceText.trim().length === 0) {
     new Notice("Please enter some text.");
     return;
   }
@@ -23,44 +87,38 @@ export async function generateFlashcard(
     return;
   }
 
+  const fields = parseOutputFields(settings.outputFields);
+  if (fields.length === 0) {
+    new Notice("No output fields defined. Check Settings → Output Schema.");
+    return;
+  }
+
   const loadingNotice = new Notice("Generating flashcard…", 0);
 
   try {
-    const google = createGoogleGenerativeAI({
-      apiKey: settings.geminiApiKey,
-    });
+    const google = createGoogleGenerativeAI({ apiKey: settings.geminiApiKey });
 
-    const wcEnum = wordClassList.length >= 2
-      ? z.enum(wordClassList as [string, string, ...string[]])
-      : z.string();
+    const schema = buildSchema(fields);
 
     const prompt = settings.customPrompt
       .replace(/\{\{language\}\}/g, settings.language)
-      .replace(/\{\{text\}\}/g, selectedText.trim());
+      .replace(/\{\{source_text\}\}/g, sourceText.trim());
 
     const { output: flashcard } = await generateText({
-      model: google("gemini-2.5-flash-lite"),
-      output: Output.object({
-        schema: z.object({
-          dictionary_form: z.string(),
-          word_class: wcEnum,
-          translation: z.string(),
-          example_1: z.string(),
-          example_2: z.string(),
-          example_1_translation: z.string(),
-          example_2_translation: z.string(),
-          note: z.string(),
-        }),
-      }),
+      model: google(settings.geminiModel),
+      output: Output.object({ schema }),
       prompt,
     });
 
     loadingNotice.hide();
 
-    const noteTitle = sanitizeFilename(flashcard.dictionary_form);
+    const rawTitle = flashcard[settings.titleField] as string | undefined;
+    const noteTitle = sanitizeFilename(rawTitle ?? "");
 
     if (noteTitle.length === 0) {
-      new Notice("Could not create a valid filename from the AI response.");
+      new Notice(
+        `Title field "${settings.titleField}" is empty or missing in the AI response.`
+      );
       return;
     }
 
@@ -80,17 +138,26 @@ export async function generateFlashcard(
       await leaf.openFile(existingFile as any);
       new Notice(`"${noteTitle}" already exists — opened it.`);
     } else {
-      const newFile = await app.vault.create(filePath, `${flashcard.note}\n\n- ${flashcard.example_1} (${flashcard.example_1_translation})\n- ${flashcard.example_2} (${flashcard.example_2_translation})`);
+      const body = renderTemplate(
+        settings.noteBodyTemplate,
+        flashcard as Record<string, string>
+      );
+      const newFile = await app.vault.create(filePath, body);
+
+      const fmValues = parseFrontmatterConfig(
+        settings.frontmatterConfig,
+        flashcard as Record<string, string>,
+        sourceText.trim()
+      );
       await app.fileManager.processFrontMatter(newFile, (frontmatter) => {
-        frontmatter["categories"] = ["[[Flashcards]]"];
-        frontmatter["word_class"] = flashcard.word_class;
-        frontmatter["translation"] = flashcard.translation;
-        frontmatter["group"] = "Default";
-        frontmatter["source"] = selectedText;
+        for (const [k, v] of Object.entries(fmValues)) {
+          frontmatter[k] = v;
+        }
       });
+
       const leaf = app.workspace.getLeaf("tab");
       await leaf.openFile(newFile);
-      new Notice(`Created flashcard: ${flashcard.dictionary_form} → ${flashcard.translation}`);
+      new Notice(`Created flashcard: ${noteTitle}`);
     }
   } catch (err: any) {
     loadingNotice.hide();

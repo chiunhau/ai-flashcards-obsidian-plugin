@@ -1,4 +1,4 @@
-import { App, normalizePath, TFolder, TFile } from "obsidian";
+import { App, normalizePath, TFolder } from "obsidian";
 import { FlashcardData } from "../types";
 
 export function sanitizeFilename(name: string): string {
@@ -20,6 +20,12 @@ export async function ensureFolderExists(app: App, folderPath: string): Promise<
   }
 }
 
+function fmValueToString(val: unknown): string {
+  if (val === null || val === undefined) return "";
+  if (Array.isArray(val)) return val.map(String).join(", ");
+  return String(val);
+}
+
 export function loadFlashcardNotes(app: App, folderPath: string): FlashcardData[] {
   const folder = folderPath.trim();
   const files = app.vault.getMarkdownFiles().filter((f) => {
@@ -33,20 +39,15 @@ export function loadFlashcardNotes(app: App, folderPath: string): FlashcardData[
   for (const file of files) {
     const cache = app.metadataCache.getFileCache(file);
     const fm = cache?.frontmatter;
-    if (fm && fm.translation && fm.word_class) {
-      cards.push({
-        file,
-        word: file.basename,
-        translation: fm.translation,
-        wordClass: fm.word_class,
-        group: fm.group || "Default",
-      });
+    if (!fm) continue;
+
+    const frontmatter: Record<string, string> = {};
+    for (const [k, v] of Object.entries(fm)) {
+      if (k === "position") continue; // Obsidian internal key
+      frontmatter[k] = fmValueToString(v);
     }
+
+    cards.push({ file, word: file.basename, frontmatter });
   }
   return cards;
-}
-
-export function getGroups(cards: FlashcardData[]): string[] {
-  const set = new Set(cards.map((c) => c.group));
-  return Array.from(set).sort();
 }

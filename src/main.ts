@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS, FlashcardSettingTab } from "./settings";
 import { generateFlashcard } from "./api/generate";
 import { FlashcardInputModal } from "./ui/modals";
 import { PracticeSetupModal } from "./ui/practice";
-import { loadFlashcardNotes, getGroups } from "./utils/file";
+import { loadFlashcardNotes } from "./utils/file";
 
 export default class FlashcardPlugin extends Plugin {
   settings: PluginSettings = DEFAULT_SETTINGS;
@@ -81,11 +81,11 @@ export default class FlashcardPlugin extends Plugin {
 
   private async createFlashcard(editor: Editor) {
     const selectedText = editor.getSelection();
-    await generateFlashcard(this.app, this.settings, selectedText, this.getWordClassList());
+    await generateFlashcard(this.app, this.settings, selectedText);
   }
 
   private async createFlashcardFromText(selectedText: string) {
-    await generateFlashcard(this.app, this.settings, selectedText, this.getWordClassList());
+    await generateFlashcard(this.app, this.settings, selectedText);
   }
 
   private openPracticeSetup() {
@@ -94,16 +94,17 @@ export default class FlashcardPlugin extends Plugin {
       new Notice("No flashcard notes found. Create some flashcards first!");
       return;
     }
-    const wcList = this.getWordClassList();
-    const groups = getGroups(cards);
-    new PracticeSetupModal(this.app, cards, wcList, groups).open();
-  }
-
-  private getWordClassList(): string[] {
-    return this.settings.wordClasses
+    const filterKeys = this.settings.practiceFilters
       .split(",")
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
+    new PracticeSetupModal(
+      this.app,
+      cards,
+      filterKeys,
+      this.settings.practiceCardFront,
+      this.settings.practiceCardBack
+    ).open();
   }
 
   onunload() {}

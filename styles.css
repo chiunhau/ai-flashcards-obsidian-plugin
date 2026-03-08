@@ -1,3 +1,14 @@
+/* Settings – full-width textarea rows */
+.setting-full-width {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.setting-full-width .setting-item-control {
+  width: 100%;
+  justify-content: flex-start;
+}
+
 /* Practice Setup */
 .practice-setup-subtitle {
   color: var(--text-muted);

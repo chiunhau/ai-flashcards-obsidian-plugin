@@ -1,24 +1,43 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { FlashcardData } from "../types";
 
+function renderTemplate(template: string, card: FlashcardData): string {
+  return template
+    .replace(/\{\{title\}\}/g, card.word)
+    .replace(/\{\{(\w+)\}\}/g, (_, key) => card.frontmatter[key] ?? "");
+}
+
 export class PracticeSetupModal extends Modal {
   private allCards: FlashcardData[];
-  private wordClasses: string[];
-  private groups: string[];
-  private selectedClasses: Set<string>;
-  private selectedGroup: string;
+  private filterKeys: string[];
+  private cardFront: string;
+  private cardBack: string;
+  private selectedFilters: Map<string, Set<string>>;
   private cardCount: number | "all";
   private order: "random" | "alphabetical";
 
-  constructor(app: App, cards: FlashcardData[], wordClasses: string[], groups: string[]) {
+  constructor(
+    app: App,
+    cards: FlashcardData[],
+    filterKeys: string[],
+    cardFront: string,
+    cardBack: string
+  ) {
     super(app);
     this.allCards = cards;
-    this.wordClasses = wordClasses;
-    this.groups = groups;
-    this.selectedClasses = new Set(wordClasses);
-    this.selectedGroup = "all";
+    this.filterKeys = filterKeys;
+    this.cardFront = cardFront;
+    this.cardBack = cardBack;
     this.cardCount = 10;
     this.order = "random";
+
+    this.selectedFilters = new Map();
+    for (const key of filterKeys) {
+      const values = new Set(
+        cards.map((c) => c.frontmatter[key] ?? "").filter((v) => v !== "")
+      );
+      this.selectedFilters.set(key, new Set(values));
+    }
   }
 
   onOpen() {
@@ -30,7 +49,6 @@ export class PracticeSetupModal extends Modal {
       cls: "practice-setup-subtitle",
     });
 
-    // Card count
     new Setting(contentEl)
       .setName("Number of cards")
       .addDropdown((dd) => {
@@ -44,37 +62,27 @@ export class PracticeSetupModal extends Modal {
         });
       });
 
-    // Word class filter
-    const wcSetting = new Setting(contentEl).setName("Word class");
-    const wcContainer = wcSetting.controlEl.createDiv({ cls: "practice-wc-checkboxes" });
-    for (const wc of this.wordClasses) {
-      const label = wcContainer.createEl("label", { cls: "practice-wc-label" });
-      const cb = label.createEl("input", { type: "checkbox" }) as HTMLInputElement;
-      cb.checked = true;
-      cb.addEventListener("change", () => {
-        if (cb.checked) this.selectedClasses.add(wc);
-        else this.selectedClasses.delete(wc);
-      });
-      label.appendText(" " + wc);
-    }
+    for (const key of this.filterKeys) {
+      const allValues = [...(this.selectedFilters.get(key) ?? [])].sort();
+      if (allValues.length <= 1) continue;
 
-    // Group filter
-    if (this.groups.length > 1) {
-      new Setting(contentEl)
-        .setName("Group")
-        .addDropdown((dd) => {
-          dd.addOption("all", "All groups");
-          for (const g of this.groups) {
-            dd.addOption(g, g);
-          }
-          dd.setValue("all");
-          dd.onChange((v) => {
-            this.selectedGroup = v;
-          });
+      const label = key.replace(/_/g, " ");
+      const setting = new Setting(contentEl).setName(label);
+      const container = setting.controlEl.createDiv({ cls: "practice-wc-checkboxes" });
+
+      for (const val of allValues) {
+        const lbl = container.createEl("label", { cls: "practice-wc-label" });
+        const cb = lbl.createEl("input", { type: "checkbox" }) as HTMLInputElement;
+        cb.checked = true;
+        cb.addEventListener("change", () => {
+          const selected = this.selectedFilters.get(key)!;
+          if (cb.checked) selected.add(val);
+          else selected.delete(val);
         });
+        lbl.appendText(" " + val);
+      }
     }
 
-    // Order
     new Setting(contentEl)
       .setName("Order")
       .addDropdown((dd) => {
@@ -86,18 +94,19 @@ export class PracticeSetupModal extends Modal {
         });
       });
 
-    // Start button
     const btnContainer = contentEl.createDiv({ cls: "modal-button-container" });
     btnContainer.createEl("button", { text: "Start", cls: "mod-cta" })
       .addEventListener("click", () => this.startPractice());
   }
 
   private startPractice() {
-    let cards = this.allCards.filter((c) => this.selectedClasses.has(c.wordClass));
-
-    if (this.selectedGroup !== "all") {
-      cards = cards.filter((c) => c.group === this.selectedGroup);
-    }
+    let cards = this.allCards.filter((card) => {
+      for (const [key, selectedValues] of this.selectedFilters) {
+        const cardValue = card.frontmatter[key] ?? "";
+        if (selectedValues.size > 0 && !selectedValues.has(cardValue)) return false;
+      }
+      return true;
+    });
 
     if (cards.length === 0) {
       new Notice("No cards match the selected filters.");
@@ -115,7 +124,7 @@ export class PracticeSetupModal extends Modal {
     }
 
     this.close();
-    new PracticeModal(this.app, cards).open();
+    new PracticeModal(this.app, cards, this.cardFront, this.cardBack).open();
   }
 
   onClose() {
@@ -125,14 +134,18 @@ export class PracticeSetupModal extends Modal {
 
 export class PracticeModal extends Modal {
   private cards: FlashcardData[];
+  private cardFront: string;
+  private cardBack: string;
   private currentIndex: number;
   private results: ("know" | "dont_know")[];
   private isFlipped: boolean;
   private boundKeyHandler: (e: KeyboardEvent) => void;
 
-  constructor(app: App, cards: FlashcardData[]) {
+  constructor(app: App, cards: FlashcardData[], cardFront: string, cardBack: string) {
     super(app);
     this.cards = cards;
+    this.cardFront = cardFront;
+    this.cardBack = cardBack;
     this.currentIndex = 0;
     this.results = [];
     this.isFlipped = false;
@@ -165,46 +178,35 @@ export class PracticeModal extends Modal {
     const total = this.cards.length;
     const current = this.currentIndex + 1;
 
-    // Progress
     const progressWrapper = contentEl.createDiv({ cls: "practice-progress" });
     progressWrapper.createEl("span", { text: `${current} / ${total}` });
     const bar = progressWrapper.createDiv({ cls: "practice-bar" });
     const fill = bar.createDiv({ cls: "practice-bar-fill" });
     fill.style.width = `${(current / total) * 100}%`;
 
-    // Word class badge
-    const badge = contentEl.createDiv({ cls: "practice-badge" });
-    badge.setText(card.wordClass);
-
-    // Card
     const cardEl = contentEl.createDiv({ cls: "practice-card" });
-    cardEl.createEl("div", { text: card.word, cls: "practice-word" });
+    cardEl.createEl("div", {
+      text: renderTemplate(this.cardFront, card),
+      cls: "practice-word",
+    });
 
     if (!this.isFlipped) {
-      const hint = contentEl.createDiv({ cls: "practice-hint" });
-      hint.setText("Press Space or click to reveal");
+      contentEl.createDiv({ cls: "practice-hint" }).setText("Press Space or click to reveal");
       cardEl.addEventListener("click", () => this.flipCard());
       cardEl.style.cursor = "pointer";
     } else {
       cardEl.addClass("flipped");
       cardEl.createEl("div", { cls: "practice-divider" });
-      cardEl.createEl("div", { text: card.translation, cls: "practice-translation" });
-
-      // Load note body async
-      this.app.vault.cachedRead(card.file).then((body) => {
-        // Strip frontmatter
-        const stripped = body.replace(/^---[\s\S]*?---\s*/, "").trim();
-        if (stripped) {
-          cardEl.createEl("div", { text: stripped, cls: "practice-note" });
-        }
+      cardEl.createEl("div", {
+        text: renderTemplate(this.cardBack, card),
+        cls: "practice-translation",
       });
 
-      // Buttons
       const btns = contentEl.createDiv({ cls: "practice-buttons" });
-      const dontKnowBtn = btns.createEl("button", { text: "✗  Don't know  ←", cls: "practice-btn-dont-know" });
-      dontKnowBtn.addEventListener("click", () => this.answer("dont_know"));
-      const knowBtn = btns.createEl("button", { text: "✓  Know it  →", cls: "practice-btn-know" });
-      knowBtn.addEventListener("click", () => this.answer("know"));
+      btns.createEl("button", { text: "✗  Don't know  ←", cls: "practice-btn-dont-know" })
+        .addEventListener("click", () => this.answer("dont_know"));
+      btns.createEl("button", { text: "✓  Know it  →", cls: "practice-btn-know" })
+        .addEventListener("click", () => this.answer("know"));
     }
   }
 
@@ -217,7 +219,6 @@ export class PracticeModal extends Modal {
     this.results.push(result);
     this.currentIndex++;
     this.isFlipped = false;
-
     if (this.currentIndex >= this.cards.length) {
       this.renderResults();
     } else {
@@ -235,18 +236,12 @@ export class PracticeModal extends Modal {
     contentEl.createEl("h2", { text: "Session Complete!" });
 
     const scoreEl = contentEl.createDiv({ cls: "practice-score" });
-    scoreEl.createEl("span", {
-      text: `${known}`,
-      cls: "practice-score-num",
-    });
+    scoreEl.createEl("span", { text: `${known}`, cls: "practice-score-num" });
     scoreEl.createEl("span", { text: ` / ${total}` });
 
-    // Score bar
     const bar = contentEl.createDiv({ cls: "practice-bar practice-bar-result" });
-    const fill = bar.createDiv({ cls: "practice-bar-fill" });
-    fill.style.width = `${(known / total) * 100}%`;
+    bar.createDiv({ cls: "practice-bar-fill" }).style.width = `${(known / total) * 100}%`;
 
-    // Missed words
     const missed = this.cards.filter((_, i) => this.results[i] === "dont_know");
     if (missed.length > 0) {
       contentEl.createEl("h3", { text: "Words to review" });
@@ -254,22 +249,21 @@ export class PracticeModal extends Modal {
       for (const card of missed) {
         const li = list.createEl("li");
         const link = li.createEl("a", {
-          text: `${card.word}  →  ${card.translation}`,
+          text: `${renderTemplate(this.cardFront, card)}  →  ${renderTemplate(this.cardBack, card)}`,
           cls: "practice-missed-link",
         });
         link.addEventListener("click", (e) => {
           e.preventDefault();
           this.close();
-          const leaf = this.app.workspace.getLeaf("tab");
-          leaf.openFile(card.file);
+          this.app.workspace.getLeaf("tab").openFile(card.file);
         });
       }
     } else {
       contentEl.createEl("p", { text: "Perfect score! 🎉", cls: "practice-perfect" });
     }
 
-    const btnContainer = contentEl.createDiv({ cls: "modal-button-container" });
-    btnContainer.createEl("button", { text: "Close", cls: "mod-cta" })
+    contentEl.createDiv({ cls: "modal-button-container" })
+      .createEl("button", { text: "Close", cls: "mod-cta" })
       .addEventListener("click", () => this.close());
   }
 

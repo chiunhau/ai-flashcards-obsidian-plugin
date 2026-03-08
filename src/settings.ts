@@ -3,25 +3,42 @@ import type FlashcardPlugin from "./main";
 import { PluginSettings } from "./types";
 
 export const DEFAULT_PROMPT = `You are a {{language}} language expert.
-Extract the {{language}} word or short phrase from the following text and provide its:
-- dictionary form
-- English translation
-- word class
-- example sentence 1 (with translation)
-- example sentence 2 (with translation)
-- note
-For the note:
-- if the word is a verb, output: "Infinitive (1st Pers. Pres, 3rd Pers. Past)", e.g. "syödä (syön, söi)"
-- if the word is a noun or adjective, output: "Word (Genitive, Partitive)", e.g. "katu (kadun, katua)"
+Extract the word or short phrase from the following text and generate a flashcard for it.
+Text to extract from: "{{source_text}}"`;
 
-Text to extract from: "{{text}}"`;
+export const DEFAULT_OUTPUT_FIELDS = `dictionary_form: Base/dictionary form of the word
+word_class: Grammatical category (e.g. noun, verb, adjective, adverb, etc.)
+translation: English translation
+example_1: First example sentence
+example_1_translation: English translation of first example
+example_2: Second example sentence
+example_2_translation: English translation of second example`;
+
+export const DEFAULT_NOTE_BODY_TEMPLATE = `- {{example_1}} ({{example_1_translation}})
+- {{example_2}} ({{example_2_translation}})`;
+
+export const DEFAULT_FRONTMATTER_CONFIG = `translation: {{translation}}
+word_class: {{word_class}}
+group: Default
+source: {{source_text}}`;
+
+export const DEFAULT_CARD_FRONT = `{{title}}`;
+
+export const DEFAULT_CARD_BACK = `{{translation}} ({{word_class}})`;
 
 export const DEFAULT_SETTINGS: PluginSettings = {
-  folder: "",
+  folder: "Flashcards",
   geminiApiKey: "",
+  geminiModel: "gemini-2.5-flash-lite",
   language: "Finnish",
-  wordClasses: "noun, verb, adjective, adverb, other",
   customPrompt: DEFAULT_PROMPT,
+  outputFields: DEFAULT_OUTPUT_FIELDS,
+  titleField: "dictionary_form",
+  noteBodyTemplate: DEFAULT_NOTE_BODY_TEMPLATE,
+  frontmatterConfig: DEFAULT_FRONTMATTER_CONFIG,
+  practiceCardFront: DEFAULT_CARD_FRONT,
+  practiceCardBack: DEFAULT_CARD_BACK,
+  practiceFilters: "word_class, group",
 };
 
 export class FlashcardSettingTab extends PluginSettingTab {
@@ -36,13 +53,13 @@ export class FlashcardSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Flashcard Generator" });
+    // ── General ───────────────────────────────────────────────────────────────
+
+    containerEl.createEl("h2", { text: "General" });
 
     new Setting(containerEl)
-      .setName("Gemini API key")
-      .setDesc(
-        "Your Google AI API key. Get one at https://aistudio.google.com/apikey"
-      )
+      .setName("API key")
+      .setDesc("Google AI API key. Get one at aistudio.google.com/apikey")
       .addText((text) =>
         text
           .setPlaceholder("Enter your API key")
@@ -58,10 +75,24 @@ export class FlashcardSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("New note location")
-      .setDesc(
-        "Folder where flashcard notes are created (relative to vault root). Leave empty for vault root."
-      )
+      .setName("Model")
+      .setDesc("Gemini model ID (e.g. gemini-2.5-flash-lite, gemini-2.5-flash).")
+      .addText((text) =>
+        text
+          .setPlaceholder("gemini-2.5-flash-lite")
+          .setValue(this.plugin.settings.geminiModel)
+          .then((t) => {
+            t.inputEl.style.width = "250px";
+          })
+          .onChange(async (value) => {
+            this.plugin.settings.geminiModel = value.trim() || "gemini-2.5-flash-lite";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Flashcards folder")
+      .setDesc("Where flashcard notes are saved, relative to vault root. Leave empty to use vault root.")
       .addText((text) =>
         text
           .setPlaceholder("e.g. Finnish/Flashcards")
@@ -72,11 +103,13 @@ export class FlashcardSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h2", { text: "Language & AI" });
+    // ── Generation ────────────────────────────────────────────────────────────
+
+    containerEl.createEl("h2", { text: "Generation" });
 
     new Setting(containerEl)
-      .setName("Target language")
-      .setDesc("The language you are learning.")
+      .setName("Language")
+      .setDesc("Language you are learning. Available in the prompt as {{language}}.")
       .addText((text) =>
         text
           .setPlaceholder("e.g. Finnish")
@@ -87,34 +120,16 @@ export class FlashcardSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Word classes")
-      .setDesc("Comma-separated list of word classes for classification.")
-      .addText((text) =>
-        text
-          .setPlaceholder("noun, verb, adjective, adverb, other")
-          .setValue(this.plugin.settings.wordClasses)
-          .then((t) => {
-            t.inputEl.style.width = "300px";
-          })
-          .onChange(async (value) => {
-            this.plugin.settings.wordClasses = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("AI prompt")
-      .setDesc(
-        "Custom prompt sent to the AI. Use {{language}} and {{text}} as placeholders."
-      )
+    const promptSetting = new Setting(containerEl)
+      .setName("Prompt")
+      .setDesc("Sent to the AI with {{language}} and {{source_text}} substituted. The output fields below define what structured data the AI must return.")
       .addTextArea((text) =>
         text
-          .setPlaceholder("Enter custom prompt...")
+          .setPlaceholder("Enter prompt...")
           .setValue(this.plugin.settings.customPrompt)
           .then((t) => {
             t.inputEl.style.width = "100%";
-            t.inputEl.style.height = "200px";
+            t.inputEl.style.height = "160px";
             t.inputEl.style.fontFamily = "monospace";
             t.inputEl.style.fontSize = "0.85em";
           })
@@ -123,13 +138,179 @@ export class FlashcardSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+    promptSetting.settingEl.addClass("setting-full-width");
 
-    const resetContainer = containerEl.createDiv({ cls: "modal-button-container" });
-    resetContainer.createEl("button", { text: "Reset prompt to default" })
+    containerEl.createDiv({ cls: "modal-button-container" })
+      .createEl("button", { text: "Reset to default" })
       .addEventListener("click", async () => {
         this.plugin.settings.customPrompt = DEFAULT_PROMPT;
         await this.plugin.saveSettings();
         this.display();
       });
+
+    // ── Output ────────────────────────────────────────────────────────────────
+
+    containerEl.createEl("h2", { text: "Output" });
+
+    const outputFieldsSetting = new Setting(containerEl)
+      .setName("Output fields")
+      .setDesc("One per line: fieldKey: Description. The AI returns each field as structured data; descriptions guide its output.")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("field_key: Description for the AI")
+          .setValue(this.plugin.settings.outputFields)
+          .then((t) => {
+            t.inputEl.style.width = "100%";
+            t.inputEl.style.height = "180px";
+            t.inputEl.style.fontFamily = "monospace";
+            t.inputEl.style.fontSize = "0.85em";
+          })
+          .onChange(async (value) => {
+            this.plugin.settings.outputFields = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    outputFieldsSetting.settingEl.addClass("setting-full-width");
+
+    containerEl.createDiv({ cls: "modal-button-container" })
+      .createEl("button", { text: "Reset to default" })
+      .addEventListener("click", async () => {
+        this.plugin.settings.outputFields = DEFAULT_OUTPUT_FIELDS;
+        await this.plugin.saveSettings();
+        this.display();
+      });
+
+    
+
+    // ── Note ──────────────────────────────────────────────────────────────────
+
+    containerEl.createEl("h2", { text: "Note" });
+
+    new Setting(containerEl)
+      .setName("Title")
+      .setDesc("Output field whose value becomes the note filename.")
+      .addText((text) =>
+        text
+          .setPlaceholder("dictionary_form")
+          .setValue(this.plugin.settings.titleField)
+          .onChange(async (value) => {
+            this.plugin.settings.titleField = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    const bodySetting = new Setting(containerEl)
+      .setName("Body")
+      .setDesc("Note content template. Use {{fieldKey}} to insert AI output fields.")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("{{example_1}} ({{example_1_translation}})")
+          .setValue(this.plugin.settings.noteBodyTemplate)
+          .then((t) => {
+            t.inputEl.style.width = "100%";
+            t.inputEl.style.height = "120px";
+            t.inputEl.style.fontFamily = "monospace";
+            t.inputEl.style.fontSize = "0.85em";
+          })
+          .onChange(async (value) => {
+            this.plugin.settings.noteBodyTemplate = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    bodySetting.settingEl.addClass("setting-full-width");
+
+    containerEl.createDiv({ cls: "modal-button-container" })
+      .createEl("button", { text: "Reset to default" })
+      .addEventListener("click", async () => {
+        this.plugin.settings.noteBodyTemplate = DEFAULT_NOTE_BODY_TEMPLATE;
+        await this.plugin.saveSettings();
+        this.display();
+      });
+
+    const propertiesSetting = new Setting(containerEl)
+      .setName("Properties")
+      .setDesc("One per line: propertyKey: value. Use {{fieldKey}} for AI output, {{source_text}} for the original selected text. JSON arrays are supported (e.g. [\"[[Tag]]\"]).")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("word_class: {{word_class}}\ntranslation: {{translation}}\ngroup: Default")
+          .setValue(this.plugin.settings.frontmatterConfig)
+          .then((t) => {
+            t.inputEl.style.width = "100%";
+            t.inputEl.style.height = "140px";
+            t.inputEl.style.fontFamily = "monospace";
+            t.inputEl.style.fontSize = "0.85em";
+          })
+          .onChange(async (value) => {
+            this.plugin.settings.frontmatterConfig = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    propertiesSetting.settingEl.addClass("setting-full-width");
+
+    containerEl.createDiv({ cls: "modal-button-container" })
+      .createEl("button", { text: "Reset to default" })
+      .addEventListener("click", async () => {
+        this.plugin.settings.frontmatterConfig = DEFAULT_FRONTMATTER_CONFIG;
+        await this.plugin.saveSettings();
+        this.display();
+      });
+
+    // ── Practice ──────────────────────────────────────────────────────────────
+
+    containerEl.createEl("h2", { text: "Practice" });
+
+    const cardFrontSetting = new Setting(containerEl)
+      .setName("Card front")
+      .setDesc("Template for the front of each practice card. Use {{title}} for the note title, or {{propertyKey}} for any note property.")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("{{title}}")
+          .setValue(this.plugin.settings.practiceCardFront)
+          .then((t) => {
+            t.inputEl.style.width = "100%";
+            t.inputEl.style.height = "80px";
+            t.inputEl.style.fontFamily = "monospace";
+            t.inputEl.style.fontSize = "0.85em";
+          })
+          .onChange(async (value) => {
+            this.plugin.settings.practiceCardFront = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    cardFrontSetting.settingEl.addClass("setting-full-width");
+
+    const cardBackSetting = new Setting(containerEl)
+      .setName("Card back")
+      .setDesc("Template for the back of each practice card. Use {{title}} for the note title, or {{propertyKey}} for any note property.")
+      .addTextArea((text) =>
+        text
+          .setPlaceholder("{{translation}}")
+          .setValue(this.plugin.settings.practiceCardBack)
+          .then((t) => {
+            t.inputEl.style.width = "100%";
+            t.inputEl.style.height = "80px";
+            t.inputEl.style.fontFamily = "monospace";
+            t.inputEl.style.fontSize = "0.85em";
+          })
+          .onChange(async (value) => {
+            this.plugin.settings.practiceCardBack = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    cardBackSetting.settingEl.addClass("setting-full-width");
+
+    new Setting(containerEl)
+      .setName("Filter fields")
+      .setDesc("Comma-separated property keys shown as filter options in the practice setup. Each becomes a checkbox group of all unique values found in your notes.")
+      .addText((text) =>
+        text
+          .setPlaceholder("word_class, group")
+          .setValue(this.plugin.settings.practiceFilters)
+          .then((t) => { t.inputEl.style.width = "250px"; })
+          .onChange(async (value) => {
+            this.plugin.settings.practiceFilters = value;
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }
