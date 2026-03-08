@@ -54,6 +54,12 @@ export default class FlashcardPlugin extends Plugin {
       },
     });
 
+    this.registerObsidianProtocolHandler("ai-flashcards", async (params) => {
+      if (params.text) {
+        await this.createFlashcardFromText(params.text);
+      }
+    });
+
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         const selection = editor.getSelection();

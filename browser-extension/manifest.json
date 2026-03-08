@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "AI Flashcards → Obsidian",
+  "version": "1.0.0",
+  "description": "Select text in the browser and create a flashcard in Obsidian.",
+  "permissions": ["contextMenus", "scripting", "activeTab"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
